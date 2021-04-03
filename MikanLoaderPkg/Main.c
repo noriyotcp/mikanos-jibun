@@ -147,7 +147,8 @@ const CHAR16 *GetPixelFormatUnicode(EFI_GRAPHICS_PIXEL_FORMAT fmt) {
 }
 
 void Halt(void) {
-  while (1) __asm__("hlt");
+  while (1)
+    __asm__("hlt");
 }
 
 EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle,
@@ -212,8 +213,8 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle,
   }
 
   EFI_FILE_PROTOCOL *kernel_file;
-  status = root_dir->Open(root_dir, &kernel_file, L"\\kernel.elf", EFI_FILE_MODE_READ,
-                 0);
+  status = root_dir->Open(root_dir, &kernel_file, L"\\kernel.elf",
+                          EFI_FILE_MODE_READ, 0);
   if (EFI_ERROR(status)) {
     Print(L"failed to open file '\\kernel.elf': %r\n", status);
     Halt();
@@ -222,7 +223,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle,
   UINTN file_info_size = sizeof(EFI_FILE_INFO) + sizeof(CHAR16) * 12;
   UINT8 file_info_buffer[file_info_size];
   status = kernel_file->GetInfo(kernel_file, &gEfiFileInfoGuid, &file_info_size,
-                       file_info_buffer);
+                                file_info_buffer);
   if (EFI_ERROR(status)) {
     Print(L"failed to file information: %r\n", status);
     Halt();
@@ -233,13 +234,15 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle,
 
   EFI_PHYSICAL_ADDRESS kernel_base_addr = 0x100000;
   status = gBS->AllocatePages(AllocateAddress, EfiLoaderData,
-                     (kernel_file_size + 0xfff) / 0x1000, &kernel_base_addr);
+                              (kernel_file_size + 0xfff) / 0x1000,
+                              &kernel_base_addr);
   if (EFI_ERROR(status)) {
     Print(L"failed to allocate pages: %r", status);
     Halt();
   }
 
-  status = kernel_file->Read(kernel_file, &kernel_file_size, (VOID *)kernel_base_addr);
+  status = kernel_file->Read(kernel_file, &kernel_file_size,
+                             (VOID *)kernel_base_addr);
   if (EFI_ERROR(status)) {
     Print(L"error: %r", status);
     Halt();
