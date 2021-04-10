@@ -1,5 +1,7 @@
+#include "elf.hpp"
 #include "frame_buffer_config.hpp"
 #include <Guid/FileInfo.h>
+#include <Library/BaseMemoryLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/PrintLib.h>
 #include <Library/UefiBootServicesTableLib.h>
@@ -70,13 +72,17 @@ const CHAR16 *GetMemoryTypeUnicode(EFI_MEMORY_TYPE type) {
 }
 
 EFI_STATUS SaveMemoryMap(struct MemoryMap *map, EFI_FILE_PROTOCOL *file) {
+  EFI_STATUS status;
   CHAR8 buf[256];
   UINTN len;
 
   CHAR8 *header =
       "Index, Type, Type(name), PhysicalStart, NumberOfPages, Attribute\n";
   len = AsciiStrLen(header);
-  file->Write(file, &len, header);
+  status = file->Write(file, &len, header);
+  if (EFI_ERROR(status)) {
+    return status;
+  }
 
   Print(L"map->buffer = %081x, map->map_size = %081x\n", map->buffer,
         map->map_size);
@@ -91,27 +97,35 @@ EFI_STATUS SaveMemoryMap(struct MemoryMap *map, EFI_FILE_PROTOCOL *file) {
                       desc->Type, GetMemoryTypeUnicode(desc->Type),
                       desc->PhysicalStart, desc->NumberOfPages,
                       desc->Attribute & 0xffffflu);
-    file->Write(file, &len, buf);
+    status = file->Write(file, &len, buf);
+    if (EFI_ERROR(status)) {
+      return status;
+    }
   }
 
   return EFI_SUCCESS;
 }
 
 EFI_STATUS OpenRootDir(EFI_HANDLE image_handle, EFI_FILE_PROTOCOL **root) {
+  EFI_STATUS status;
   EFI_LOADED_IMAGE_PROTOCOL *loaded_image;
   EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs;
 
-  gBS->OpenProtocol(image_handle, &gEfiLoadedImageProtocolGuid,
-                    (VOID **)&loaded_image, image_handle, NULL,
-                    EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL);
+  status = gBS->OpenProtocol(image_handle, &gEfiLoadedImageProtocolGuid,
+                             (VOID **)&loaded_image, image_handle, NULL,
+                             EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL);
+  if (EFI_ERROR(status)) {
+    return status;
+  }
 
-  gBS->OpenProtocol(loaded_image->DeviceHandle,
-                    &gEfiSimpleFileSystemProtocolGuid, (VOID **)&fs,
-                    image_handle, NULL, EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL);
+  status = gBS->OpenProtocol(
+      loaded_image->DeviceHandle, &gEfiSimpleFileSystemProtocolGuid,
+      (VOID **)&fs, image_handle, NULL, EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL);
+  if (EFI_ERROR(status)) {
+    return status;
+  }
 
-  fs->OpenVolume(fs, root);
-
-  return EFI_SUCCESS;
+  return fs->OpenVolume(fs, root);
 }
 
 EFI_STATUS OpenGOP(EFI_HANDLE image_handle,
@@ -150,6 +164,32 @@ const CHAR16 *GetPixelFormatUnicode(EFI_GRAPHICS_PIXEL_FORMAT fmt) {
 void Halt(void) {
   while (1)
     __asm__("hlt");
+}
+
+void CalcLoadAddressRange(Elf64_Ehdr *ehdr, UINT64 *first, UINT64 *last) {
+  Elf64_Phdr *phdr = (Elf64_Phdr *)((UINT64)ehdr + ehdr->e_phoff);
+  *first = MAX_UINT64;
+  *last = 0;
+  for (Elf64_Half i = 0; i < ehdr->e_phnum; ++i) {
+    if (phdr[i].p_type != PT_LOAD)
+      continue;
+    *first = MIN(*first, phdr[i].p_vaddr);
+    *last = MAX(*last, phdr[i].p_vaddr + phdr[i].p_memsz);
+  }
+}
+
+void CopyLoadSegments(Elf64_Ehdr *ehdr) {
+  Elf64_Phdr *phdr = (Elf64_Phdr *)((UINT64)ehdr + ehdr->e_phoff);
+  for (Elf64_Half i = 0; i < ehdr->e_phnum; ++i) {
+    if (phdr[i].p_type != PT_LOAD)
+      continue;
+
+    UINT64 segm_in_file = (UINT64)ehdr + phdr[i].p_offset;
+    CopyMem((VOID *)phdr[i].p_vaddr, (VOID *)segm_in_file, phdr[i].p_filesz);
+
+    UINTN remain_bytes = phdr[i].p_memsz - phdr[i].p_filesz;
+    SetMem((VOID *)(phdr[i].p_vaddr + phdr[i].p_filesz), remain_bytes, 0);
+  }
 }
 
 EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle,
@@ -233,22 +273,38 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle,
   EFI_FILE_INFO *file_info = (EFI_FILE_INFO *)file_info_buffer;
   UINTN kernel_file_size = file_info->FileSize;
 
-  EFI_PHYSICAL_ADDRESS kernel_base_addr = 0x100000;
-  status = gBS->AllocatePages(AllocateAddress, EfiLoaderData,
-                              (kernel_file_size + 0xfff) / 0x1000,
-                              &kernel_base_addr);
+  VOID *kernel_buffer;
+  status = gBS->AllocatePool(EfiLoaderData, kernel_file_size, &kernel_buffer);
   if (EFI_ERROR(status)) {
-    Print(L"failed to allocate pages: %r", status);
+    Print(L"failed to allocate pool: %r\n", status);
+    Halt();
+  }
+  status = kernel_file->Read(kernel_file, &kernel_file_size, kernel_buffer);
+  if (EFI_ERROR(status)) {
+    Print(L"error: %r\n", status);
     Halt();
   }
 
-  status = kernel_file->Read(kernel_file, &kernel_file_size,
-                             (VOID *)kernel_base_addr);
+  Elf64_Ehdr *kernel_ehdr = (Elf64_Ehdr *)kernel_buffer;
+  UINT64 kernel_first_addr, kernel_last_addr;
+  CalcLoadAddressRange(kernel_ehdr, &kernel_first_addr, &kernel_last_addr);
+
+  UINTN num_pages = (kernel_last_addr - kernel_first_addr + 0xfff) / 0x1000;
+  status = gBS->AllocatePages(AllocateAddress, EfiLoaderData, num_pages,
+                              &kernel_first_addr);
   if (EFI_ERROR(status)) {
-    Print(L"error: %r", status);
+    Print(L"failed to allocate pages: %r\n", status);
     Halt();
   }
-  Print(L"Kernel: 0x%0lx (%lu bytes)\n", kernel_base_addr, kernel_file_size);
+
+  CopyLoadSegments(kernel_ehdr);
+  Print(L"Kernel: 0x%0lx - 0x%0lx\n", kernel_first_addr, kernel_last_addr);
+
+  status = gBS->FreePool(kernel_buffer);
+  if (EFI_ERROR(status)) {
+    Print(L"failed to free pool: %r\n", status);
+    Halt();
+  }
 
   status = gBS->ExitBootServices(image_handle, memmap.map_key);
   if (EFI_ERROR(status)) {
@@ -265,7 +321,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle,
     }
   }
 
-  UINT64 entry_addr = *(UINT64 *)(kernel_base_addr + 24);
+  UINT64 entry_addr = *(UINT64 *)(kernel_first_addr + 24);
 
   struct FrameBufferConfig config = {(UINT8 *)gop->Mode->FrameBufferBase,
                                      gop->Mode->Info->PixelsPerScanLine,
