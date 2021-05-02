@@ -131,7 +131,7 @@ namespace pci {
   }
 
   uint32_t ReadClassCode(uint8_t bus, uint8_t device, uint8_t function) {
-    WriteAddress(MakeAddress(bus, device, function, 0x88));
+    WriteAddress(MakeAddress(bus, device, function, 0x08));
     return ReadData();
   }
 
