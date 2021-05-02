@@ -1,5 +1,1 @@
-kernel.elf
-*.o
-*.d
 .vscode
-hankaku.bin
