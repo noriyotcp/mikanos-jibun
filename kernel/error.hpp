@@ -26,15 +26,16 @@ public:
     kInvalidPhase,
     kUnknownXHCISpeedID,
     kNoWaiter,
+    kNoPCIMSI,
     kLastOfCode, // この列挙子は常に最後に配置する
   };
 
 private:
-  // <const char *, 20> を入れないと以下の警告が出る。ビルドはできる
+  // <const char *, N> を入れないと以下の警告が出る。ビルドはできる
   // argument list for class template "std::__1::array" is missingC/C++(441)
   // expression must have a constant value -- invalid type "<error-type>" for
   // constant-expression evaluationC/C++(28)
-  static constexpr std::array<const char *, 20> code_names_{
+  static constexpr std::array<const char *, 21> code_names_{
       "kSuccess",
       "kFull",
       "kEmpty",
@@ -55,6 +56,7 @@ private:
       "kInvalidPhase",
       "kUnknownXHCISpeedID",
       "kNoWaiter",
+      "kNoPCIMSI"
   };
   static_assert(Error::Code::kLastOfCode == code_names_.size());
 

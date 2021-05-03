@@ -17,6 +17,8 @@
 #include <numeric>
 #include <vector>
 
+#include "asmfunc.h"
+#include "interrupt.hpp"
 #include "logger.hpp"
 #include "usb/classdriver/mouse.hpp"
 #include "usb/device.hpp"
@@ -77,6 +79,20 @@ void SwitchEhci2Xhci(const pci::Device &xhc_dev) {
       ehci2xhci_ports);
 }
 // #@@range_end(switch_echi2xhci)
+
+// #@@range_begin(xhci_handler)
+usb::xhci::Controller *xhc;
+
+__attribute__((interrupt)) void IntHandlerXHCI(InterruptFrame *frame) {
+  while (xhc->PrimaryEventRing()->HasFront()) {
+    if (auto err = ProcessEvent(*xhc)) {
+      Log(kError, "Error while ProcessEvent: %s at %s:%d\n", err.Name(),
+          err.File(), err.Line());
+    }
+  }
+  NotifyEndOfInterrupt();
+}
+// #@@range_end(xhci_handler)
 
 extern "C" void KernelMain(const FrameBufferConfig &frame_buffer_config) {
   switch (frame_buffer_config.pixel_format) {
@@ -144,14 +160,27 @@ extern "C" void KernelMain(const FrameBufferConfig &frame_buffer_config) {
   }
   // #@@range_end(find_xhc)
 
-  // #@@range_begin(read_bar)
+  // #@@range_begin(load_idt)
+  const uint16_t cs = GetCS();
+  SetIDTEntry(idt[InterruptVector::kXHCI],
+              MakeIDTAttr(DescriptorType::kInterruptGate, 0),
+              reinterpret_cast<int64_t>(IntHandlerXHCI), cs);
+  LoadIDT(sizeof(idt) - 1, reinterpret_cast<uintptr_t>(&idt[0]));
+  // #@@range_end(load_idt)
+
+  // #@@range_begin(configure_msi)
+  const uint8_t bsp_local_apic_id =
+      *reinterpret_cast<const uint32_t *>(0xfee00020) >> 24;
+  pci::ConfigureMSIFixedDestination(
+      *xhc_dev, bsp_local_apic_id, pci::MSITriggerMode::kLevel,
+      pci::MSIDeliveryMode::kFixed, InterruptVector::kXHCI, 0);
+  // #@@range_end(configure_msi)
+
   const WithError<uint64_t> xhc_bar = pci::ReadBar(*xhc_dev, 0);
   Log(kDebug, "ReadBar: %s\n", xhc_bar.error.Name());
   const uint64_t xhc_mmio_base = xhc_bar.value & ~static_cast<uint64_t>(0xf);
   Log(kDebug, "xHC mmio_base = %08lx\n", xhc_mmio_base);
-  // #@@range_end(read_bar)
 
-  // #@@range_begin(init_xhc)
   usb::xhci::Controller xhc{xhc_mmio_base};
 
   if (0x8086 == pci::ReadVendorId(*xhc_dev)) {
@@ -164,7 +193,9 @@ extern "C" void KernelMain(const FrameBufferConfig &frame_buffer_config) {
 
   Log(kInfo, "xHC starting\n");
   xhc.Run();
-  // #@@range_end(init_xhc)
+
+  ::xhc = &xhc;
+  __asm__("sti");
 
   // #@@range_begin(configure_port)
   usb::HIDMouseDriver::default_observer = MouseObserver;
