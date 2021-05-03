@@ -4,12 +4,6 @@
  * カーネル本体のプログラムを書いたファイル．
  */
 
-#include "console.hpp"
-#include "font.hpp"
-#include "frame_buffer_config.hpp"
-#include "graphics.hpp"
-#include "mouse.cpp"
-#include "pci.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -18,8 +12,15 @@
 #include <vector>
 
 #include "asmfunc.h"
+#include "console.hpp"
+#include "font.hpp"
+#include "frame_buffer_config.hpp"
+#include "graphics.hpp"
 #include "interrupt.hpp"
 #include "logger.hpp"
+#include "mouse.hpp"
+#include "pci.hpp"
+#include "queue.hpp"
 #include "usb/classdriver/mouse.hpp"
 #include "usb/device.hpp"
 #include "usb/memory.hpp"
@@ -80,16 +81,21 @@ void SwitchEhci2Xhci(const pci::Device &xhc_dev) {
 }
 // #@@range_end(switch_echi2xhci)
 
-// #@@range_begin(xhci_handler)
 usb::xhci::Controller *xhc;
 
+// #@@range_begin(queue_message)
+struct Message {
+  enum Type {
+    kInterruptXHCI,
+  } type;
+};
+
+ArrayQueue<Message> *main_queue;
+// #@@range_end(queue_message)
+
+// #@@range_begin(xhci_handler)
 __attribute__((interrupt)) void IntHandlerXHCI(InterruptFrame *frame) {
-  while (xhc->PrimaryEventRing()->HasFront()) {
-    if (auto err = ProcessEvent(*xhc)) {
-      Log(kError, "Error while ProcessEvent: %s at %s:%d\n", err.Name(),
-          err.File(), err.Line());
-    }
-  }
+  main_queue->Push(Message{Message::kInterruptXHCI});
   NotifyEndOfInterrupt();
 }
 // #@@range_end(xhci_handler)
@@ -130,6 +136,10 @@ extern "C" void KernelMain(const FrameBufferConfig &frame_buffer_config) {
       MouseCursor{pixel_writer, kDesktopBGColor, {300, 200}};
   // #@@range_end(new_mouse_cursor)
 
+  std::array<Message, 32> main_queue_data;
+  ArrayQueue<Message> main_queue{main_queue_data};
+  ::main_queue = &main_queue;
+
   auto err = pci::ScanAllBus();
   Log(kDebug, "ScanAllBus: %s\n", err.Name());
 
@@ -155,7 +165,7 @@ extern "C" void KernelMain(const FrameBufferConfig &frame_buffer_config) {
   }
 
   if (xhc_dev) {
-    Log(kInfo, "xHC has been found: %d.%d.$d\n", xhc_dev->bus, xhc_dev->device,
+    Log(kInfo, "xHC has been found: %d.%d.%d\n", xhc_dev->bus, xhc_dev->device,
         xhc_dev->function);
   }
   // #@@range_end(find_xhc)
@@ -164,7 +174,7 @@ extern "C" void KernelMain(const FrameBufferConfig &frame_buffer_config) {
   const uint16_t cs = GetCS();
   SetIDTEntry(idt[InterruptVector::kXHCI],
               MakeIDTAttr(DescriptorType::kInterruptGate, 0),
-              reinterpret_cast<int64_t>(IntHandlerXHCI), cs);
+              reinterpret_cast<uint64_t>(IntHandlerXHCI), cs);
   LoadIDT(sizeof(idt) - 1, reinterpret_cast<uintptr_t>(&idt[0]));
   // #@@range_end(load_idt)
 
@@ -195,12 +205,11 @@ extern "C" void KernelMain(const FrameBufferConfig &frame_buffer_config) {
   xhc.Run();
 
   ::xhc = &xhc;
-  __asm__("sti");
 
   // #@@range_begin(configure_port)
   usb::HIDMouseDriver::default_observer = MouseObserver;
 
-  for (int i = 0; i <= xhc.MaxPorts(); ++i) {
+  for (int i = 1; i <= xhc.MaxPorts(); ++i) {
     auto port = xhc.PortAt(i);
     Log(kDebug, "Port %d: IsConnected=%d\n", i, port.IsConnected());
 
@@ -214,16 +223,34 @@ extern "C" void KernelMain(const FrameBufferConfig &frame_buffer_config) {
   }
   // #@@range_end(configure_port)
 
-  // #@@range_begin(receive_event)
-  while (1) {
-    if (auto err = ProcessEvent(xhc)) {
-      Log(kError, "Error while ProcessEvent: %s at %s:%d\n", err.Name(),
-          err.File(), err.Line());
+  // #@@range_begin(event_loop)
+  while (true) {
+    // #@@range_begin(get_front_message)
+    __asm__("cli");
+    if (main_queue.Count() == 0) {
+      __asm__("sti\n\thlt");
+      continue;
+    }
+
+    Message msg = main_queue.Front();
+    main_queue.Pop();
+    __asm__("sti");
+    // #@@range_end(get_front_message)
+
+    switch (msg.type) {
+    case Message::kInterruptXHCI:
+      while (xhc.PrimaryEventRing()->HasFront()) {
+        if (auto err = ProcessEvent(xhc)) {
+          Log(kError, "Error while ProcessEvent: %s at %s:%d\n", err.Name(),
+              err.File(), err.Line());
+        }
+      }
+      break;
+    default:
+      Log(kError, "Unknown message type: %d\n", msg.type);
     }
   }
-  // #@@range_end(receive_event)
-
-  while (1) __asm__("hlt");
+  // #@@range_end(event_loop)
 }
 
 extern "C" void __cxa_pure_virtual() {
