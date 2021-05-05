@@ -20,8 +20,10 @@
 #include "logger.hpp"
 #include "memory_map.hpp"
 #include "mouse.hpp"
+#include "paging.hpp"
 #include "pci.hpp"
 #include "queue.hpp"
+#include "segment.hpp"
 #include "usb/classdriver/mouse.hpp"
 #include "usb/device.hpp"
 #include "usb/memory.hpp"
@@ -101,10 +103,17 @@ __attribute__((interrupt)) void IntHandlerXHCI(InterruptFrame *frame) {
 }
 // #@@range_end(xhci_handler)
 
-// #@@range_begin(pass_memory_map)
-extern "C" void KernelMain(const FrameBufferConfig &frame_buffer_config,
-                           const MemoryMap &memory_map) {
-  // #@@range_end(pass_memory_map)
+// #@@range_begin(main_new_stack)
+// 新しいスタック領域となるメモリ領域を定義
+alignas(16) uint8_t kernel_main_stack[1024 * 1024];
+
+extern "C" void
+KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
+                   const MemoryMap &memory_map_ref) {
+  FrameBufferConfig frame_buffer_config{frame_buffer_config_ref};
+  MemoryMap memory_map{memory_map_ref};
+  // #@@range_end(main_new_stack)
+
   switch (frame_buffer_config.pixel_format) {
   case kPixelRGBResv8BitPerColor:
     pixel_writer = new (pixel_writer_buf)
@@ -135,31 +144,29 @@ extern "C" void KernelMain(const FrameBufferConfig &frame_buffer_config,
   printk("Welcome to MikanOS!\n");
   SetLogLevel(kWarn);
 
-  // argument list for class template "std::__1::array" is missingC/C++(441)
-  // この警告が出るので <MemoryType, N> を入れる
-  const std::array<MemoryType, 3> available_memory_types{
-      MemoryType::kEfiBootServicesCode,
-      MemoryType::kEfiBootServicesData,
-      MemoryType::kEfiConventionalMemory,
-  };
+  // #@@range_begin(setup_segments_and_page)
+  SetupSegments();
 
-  // #@@range_begin(print_memory_map)
-  printk("memory_map: %p\n", &memory_map);
-  for (uintptr_t iter = reinterpret_cast<uintptr_t>(memory_map.buffer);
-       iter <
-       reinterpret_cast<uintptr_t>(memory_map.buffer) + memory_map.map_size;
+  const uint16_t kernel_cs = 1 << 3;
+  const uint16_t kernel_ss = 2 << 3;
+  SetDSAll(0);
+  SetCSSS(kernel_cs, kernel_ss);
+
+  SetupIdentityPageTable();
+  // #@@range_end(setup_segments_and_page)
+
+  const auto memory_map_base = reinterpret_cast<uintptr_t>(memory_map.buffer);
+  for (uintptr_t iter = memory_map_base;
+       iter < memory_map_base + memory_map.map_size;
        iter += memory_map.descriptor_size) {
-    auto desc = reinterpret_cast<MemoryDescriptor*>(iter);
-    for (int i = 0; i < available_memory_types.size(); ++i) {
-      if (desc->type == available_memory_types[i]) {
-        printk("type = %u, phys = %08lx, pages = %lu, attr = %08lx\n",
-               desc->type, desc->physical_start,
-               desc->physical_start + desc->number_of_pages * 4096 - 1,
-               desc->number_of_pages, desc->attribute);
-      }
+    auto desc = reinterpret_cast<MemoryDescriptor *>(iter);
+    if (IsAvailable(static_cast<MemoryType>(desc->type))) {
+      printk("type = %u, phys = %08lx - %08lx, pages = %lu, attr = %08lx\n",
+             desc->type, desc->physical_start,
+             desc->physical_start + desc->number_of_pages * 4096 - 1,
+             desc->number_of_pages, desc->attribute);
     }
   }
-  // #@@range_end(print_memory_map)
 
   // #@@range_begin(new_mouse_cursor)
   mouse_cursor = new (mouse_cursor_buf)
@@ -200,13 +207,10 @@ extern "C" void KernelMain(const FrameBufferConfig &frame_buffer_config,
   }
   // #@@range_end(find_xhc)
 
-  // #@@range_begin(load_idt)
-  const uint16_t cs = GetCS();
   SetIDTEntry(idt[InterruptVector::kXHCI],
               MakeIDTAttr(DescriptorType::kInterruptGate, 0),
-              reinterpret_cast<uint64_t>(IntHandlerXHCI), cs);
+              reinterpret_cast<uint64_t>(IntHandlerXHCI), kernel_cs);
   LoadIDT(sizeof(idt) - 1, reinterpret_cast<uintptr_t>(&idt[0]));
-  // #@@range_end(load_idt)
 
   // #@@range_begin(configure_msi)
   const uint8_t bsp_local_apic_id =
