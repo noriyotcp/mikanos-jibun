@@ -18,6 +18,7 @@
 #include "graphics.hpp"
 #include "interrupt.hpp"
 #include "logger.hpp"
+#include "memory_manager.hpp"
 #include "memory_map.hpp"
 #include "mouse.hpp"
 #include "paging.hpp"
@@ -51,6 +52,11 @@ int printk(const char *format, ...) {
   console->PutString(s);
   return result;
 }
+
+// #@@range_begin(memman_buf)
+char memory_manager_buf[sizeof(BitmapMemoryManager)];
+BitmapMemoryManager *memory_manager;
+// #@@range_end(memman_buf)
 
 // #@@range_begin(mouse_observer)
 char mouse_cursor_buf[sizeof(MouseCursor)];
@@ -155,18 +161,33 @@ KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
   SetupIdentityPageTable();
   // #@@range_end(setup_segments_and_page)
 
+  // #@@range_begin(mark_allocated)
+  ::memory_manager = new (memory_manager_buf) BitmapMemoryManager;
+
   const auto memory_map_base = reinterpret_cast<uintptr_t>(memory_map.buffer);
-  for (uintptr_t iter = memory_map_base;
-       iter < memory_map_base + memory_map.map_size;
+  uintptr_t available_end = 0;
+  for (uintptr_t iter = memory_map_base; iter < memory_map_base;
        iter += memory_map.descriptor_size) {
-    auto desc = reinterpret_cast<MemoryDescriptor *>(iter);
+    auto desc = reinterpret_cast<const MemoryDescriptor *>(iter);
+    if (available_end < desc->physical_start) {
+      memory_manager->MarkAllocated(FrameID{available_end / kBytesPerFrame},
+                                    (desc->physical_start - available_end) /
+                                        kBytesPerFrame);
+    }
+
+    const auto physical_end =
+        desc->physical_start + desc->number_of_pages * kUEFIPageSize;
     if (IsAvailable(static_cast<MemoryType>(desc->type))) {
-      printk("type = %u, phys = %08lx - %08lx, pages = %lu, attr = %08lx\n",
-             desc->type, desc->physical_start,
-             desc->physical_start + desc->number_of_pages * 4096 - 1,
-             desc->number_of_pages, desc->attribute);
+      available_end = physical_end;
+    } else {
+      memory_manager->MarkAllocated(
+          FrameID{desc->physical_start / kBytesPerFrame},
+          desc->number_of_pages * kUEFIPageSize / kBytesPerFrame);
     }
   }
+  memory_manager->SetMemoryRange(FrameID{1},
+                                 FrameID{available_end / kBytesPerFrame});
+  // #@@range_end(mark_allocated)
 
   // #@@range_begin(new_mouse_cursor)
   mouse_cursor = new (mouse_cursor_buf)
