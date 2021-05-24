@@ -17,6 +17,7 @@
 #include "frame_buffer_config.hpp"
 #include "graphics.hpp"
 #include "interrupt.hpp"
+#include "layer.hpp"
 #include "logger.hpp"
 #include "memory_manager.hpp"
 #include "memory_map.hpp"
@@ -30,9 +31,7 @@
 #include "usb/memory.hpp"
 #include "usb/xhci/trb.hpp"
 #include "usb/xhci/xhci.hpp"
-
-const PixelColor kDesktopBGColor{45, 118, 237};
-const PixelColor kDesktopFGColor{255, 255, 255};
+#include "window.hpp"
 
 char pixel_writer_buf[sizeof(RGBResv8BitPerColorPixelWriter)];
 PixelWriter *pixel_writer;
@@ -58,14 +57,14 @@ char memory_manager_buf[sizeof(BitmapMemoryManager)];
 BitmapMemoryManager *memory_manager;
 // #@@range_end(memman_buf)
 
-// #@@range_begin(mouse_observer)
-char mouse_cursor_buf[sizeof(MouseCursor)];
-MouseCursor *mouse_cursor;
+// #@@range_begin(layermgr_mousehandler)
+unsigned int mouse_layer_id;
 
 void MouseObserver(int8_t displacement_x, int8_t displacement_y) {
-  mouse_cursor->MoveRelative({displacement_x, displacement_y});
+  layer_manager->MoveRelative(mouse_layer_id, {displacement_x, displacement_y});
+  layer_manager->Draw();
 }
-// #@@range_end(mouse_observer)
+// #@@range_end(layermgr_mousehandler)
 
 // #@@range_begin(switch_echi2xhci)
 void SwitchEhci2Xhci(const pci::Device &xhc_dev) {
@@ -92,7 +91,6 @@ void SwitchEhci2Xhci(const pci::Device &xhc_dev) {
 
 usb::xhci::Controller *xhc;
 
-// #@@range_begin(queue_message)
 struct Message {
   enum Type {
     kInterruptXHCI,
@@ -100,17 +98,12 @@ struct Message {
 };
 
 ArrayQueue<Message> *main_queue;
-// #@@range_end(queue_message)
 
-// #@@range_begin(xhci_handler)
 __attribute__((interrupt)) void IntHandlerXHCI(InterruptFrame *frame) {
   main_queue->Push(Message{Message::kInterruptXHCI});
   NotifyEndOfInterrupt();
 }
-// #@@range_end(xhci_handler)
 
-// #@@range_begin(main_new_stack)
-// 新しいスタック領域となるメモリ領域を定義
 alignas(16) uint8_t kernel_main_stack[1024 * 1024];
 
 extern "C" void
@@ -118,7 +111,6 @@ KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
                    const MemoryMap &memory_map_ref) {
   FrameBufferConfig frame_buffer_config{frame_buffer_config_ref};
   MemoryMap memory_map{memory_map_ref};
-  // #@@range_end(main_new_stack)
 
   switch (frame_buffer_config.pixel_format) {
   case kPixelRGBResv8BitPerColor:
@@ -131,26 +123,15 @@ KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
     break;
   }
 
-  const int kFrameWidth = frame_buffer_config.horizontal_resolution;
-  const int kFrameHeight = frame_buffer_config.vertical_resolution;
+  // #@@range_begin(new_console)
+  DrawDesktop(*pixel_writer);
 
-  FillRectangle(*pixel_writer, {0, 0}, {kFrameWidth, kFrameHeight - 50},
-                kDesktopBGColor);
-
-  FillRectangle(*pixel_writer, {0, kFrameHeight - 50}, {kFrameWidth, 50},
-                {1, 8, 17});
-
-  FillRectangle(*pixel_writer, {0, kFrameHeight - 50}, {kFrameWidth / 5, 50},
-                {80, 80, 80});
-  DrawRectangle(*pixel_writer, {10, kFrameHeight - 40}, {30, 30},
-                {160, 160, 160});
-
-  console = new (console_buf)
-      Console{*pixel_writer, kDesktopFGColor, kDesktopBGColor};
+  console = new (console_buf) Console{kDesktopFGColor, kDesktopBGColor};
+  console->SetWriter(pixel_writer);
   printk("Welcome to MikanOS!\n");
   SetLogLevel(kWarn);
+  // #@@range_end(new_console)
 
-  // #@@range_begin(setup_segments_and_page)
   SetupSegments();
 
   const uint16_t kernel_cs = 1 << 3;
@@ -159,14 +140,13 @@ KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
   SetCSSS(kernel_cs, kernel_ss);
 
   SetupIdentityPageTable();
-  // #@@range_end(setup_segments_and_page)
 
-  // #@@range_begin(mark_allocated)
   ::memory_manager = new (memory_manager_buf) BitmapMemoryManager;
 
   const auto memory_map_base = reinterpret_cast<uintptr_t>(memory_map.buffer);
   uintptr_t available_end = 0;
-  for (uintptr_t iter = memory_map_base; iter < memory_map_base;
+  for (uintptr_t iter = memory_map_base;
+       iter < memory_map_base + memory_map.map_size;
        iter += memory_map.descriptor_size) {
     auto desc = reinterpret_cast<const MemoryDescriptor *>(iter);
     if (available_end < desc->physical_start) {
@@ -185,14 +165,16 @@ KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
           desc->number_of_pages * kUEFIPageSize / kBytesPerFrame);
     }
   }
+  // #@@range_begin(initialize_heap)
   memory_manager->SetMemoryRange(FrameID{1},
                                  FrameID{available_end / kBytesPerFrame});
-  // #@@range_end(mark_allocated)
 
-  // #@@range_begin(new_mouse_cursor)
-  mouse_cursor = new (mouse_cursor_buf)
-      MouseCursor{pixel_writer, kDesktopBGColor, {300, 200}};
-  // #@@range_end(new_mouse_cursor)
+  if (auto err = InitializeHeap(*memory_manager)) {
+    Log(kError, "failed to allocate pages: %s at %s:%d\n", err.Name(),
+        err.File(), err.Line());
+    exit(1);
+  }
+  // #@@range_end(initialize_heap)
 
   std::array<Message, 32> main_queue_data;
   ArrayQueue<Message> main_queue{main_queue_data};
@@ -209,7 +191,6 @@ KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
         dev.device, dev.function, vendor_id, class_code, dev.header_type);
   }
 
-  // #@@range_begin(find_xhc)
   // Intel 製を優先して xHC を探す
   pci::Device *xhc_dev = nullptr;
   for (int i = 0; i < pci::num_device; ++i) {
@@ -226,7 +207,6 @@ KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
     Log(kInfo, "xHC has been found: %d.%d.%d\n", xhc_dev->bus, xhc_dev->device,
         xhc_dev->function);
   }
-  // #@@range_end(find_xhc)
 
   SetIDTEntry(idt[InterruptVector::kXHCI],
               MakeIDTAttr(DescriptorType::kInterruptGate, 0),
@@ -278,9 +258,35 @@ KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
   }
   // #@@range_end(configure_port)
 
-  // #@@range_begin(event_loop)
+  // #@@range_begin(main_window)
+  const int kFrameWidth = frame_buffer_config.horizontal_resolution;
+  const int kFrameHeight = frame_buffer_config.vertical_resolution;
+
+  auto bgwindow = std::make_shared<Window>(kFrameWidth, kFrameHeight);
+  auto bgwriter = bgwindow->Writer();
+
+  DrawDesktop(*bgwriter);
+  console->SetWriter(bgwriter);
+
+  auto mouse_window =
+      std::make_shared<Window>(kMouseCursorWidth, kMouseCursorHeight);
+  mouse_window->SetTransparentColor(kMouseTransparentColor);
+  DrawMouseCursor(mouse_window->Writer(), {0, 0});
+
+  layer_manager = new LayerManager;
+  layer_manager->SetWriter(pixel_writer);
+
+  auto bglayer_id =
+      layer_manager->NewLayer().SetWindow(bgwindow).Move({0, 0}).ID();
+  mouse_layer_id =
+      layer_manager->NewLayer().SetWindow(mouse_window).Move({200, 200}).ID();
+
+  layer_manager->UpDown(bglayer_id, 0);
+  layer_manager->UpDown(mouse_layer_id, 1);
+  layer_manager->Draw();
+  // #@@range_end(main_window)
+
   while (true) {
-    // #@@range_begin(get_front_message)
     __asm__("cli");
     if (main_queue.Count() == 0) {
       __asm__("sti\n\thlt");
@@ -290,7 +296,6 @@ KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
     Message msg = main_queue.Front();
     main_queue.Pop();
     __asm__("sti");
-    // #@@range_end(get_front_message)
 
     switch (msg.type) {
     case Message::kInterruptXHCI:
@@ -305,7 +310,6 @@ KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
       Log(kError, "Unknown message type: %d\n", msg.type);
     }
   }
-  // #@@range_end(event_loop)
 }
 
 extern "C" void __cxa_pure_virtual() {
