@@ -33,6 +33,10 @@
 #include "usb/xhci/xhci.hpp"
 #include "window.hpp"
 
+// #@@range_begin(include_timer)
+#include "timer.hpp"
+// #@@range_end(include_timer)
+
 char pixel_writer_buf[sizeof(RGBResv8BitPerColorPixelWriter)];
 PixelWriter *pixel_writer;
 
@@ -57,16 +61,19 @@ char memory_manager_buf[sizeof(BitmapMemoryManager)];
 BitmapMemoryManager *memory_manager;
 // #@@range_end(memman_buf)
 
-// #@@range_begin(layermgr_mousehandler)
 unsigned int mouse_layer_id;
 
+// #@@range_begin(mouse_observer)
 void MouseObserver(int8_t displacement_x, int8_t displacement_y) {
   layer_manager->MoveRelative(mouse_layer_id, {displacement_x, displacement_y});
+  StartLAPICTimer();
   layer_manager->Draw();
+  auto elapsed = LAPICTimerElapsed();
+  StopLAPICTimer();
+  printk("MouseObserver: elapsed = %u\n", elapsed);
 }
-// #@@range_end(layermgr_mousehandler)
+// #@@range_end(mouse_observer)
 
-// #@@range_begin(switch_echi2xhci)
 void SwitchEhci2Xhci(const pci::Device &xhc_dev) {
   bool intel_ehc_exist = false;
   for (int i = 0; i < pci::num_device; ++i) {
@@ -87,7 +94,6 @@ void SwitchEhci2Xhci(const pci::Device &xhc_dev) {
   Log(kDebug, "SwitchEhci2Xhci: SS = %02, xHCI = %02x\n", superspeed_ports,
       ehci2xhci_ports);
 }
-// #@@range_end(switch_echi2xhci)
 
 usb::xhci::Controller *xhc;
 
@@ -123,14 +129,16 @@ KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
     break;
   }
 
-  // #@@range_begin(new_console)
   DrawDesktop(*pixel_writer);
 
   console = new (console_buf) Console{kDesktopFGColor, kDesktopBGColor};
   console->SetWriter(pixel_writer);
+  // #@@range_begin(initialize_lapic_timer)
   printk("Welcome to MikanOS!\n");
   SetLogLevel(kWarn);
-  // #@@range_end(new_console)
+
+  InitializeLAPICTimer();
+  // #@@range_begin(initialize_lapic_timer)
 
   SetupSegments();
 
