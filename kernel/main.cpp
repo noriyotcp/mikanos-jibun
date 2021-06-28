@@ -33,10 +33,6 @@
 #include "usb/xhci/xhci.hpp"
 #include "window.hpp"
 
-// #@@range_begin(include_timer)
-#include "timer.hpp"
-// #@@range_end(include_timer)
-
 char pixel_writer_buf[sizeof(RGBResv8BitPerColorPixelWriter)];
 PixelWriter *pixel_writer;
 
@@ -52,12 +48,6 @@ int printk(const char *format, ...) {
   result = vsprintf(s, format, ap);
   va_end(ap);
 
-  StartLAPICTimer();
-  console->PutString(s);
-  auto elapsed = LAPICTimerElapsed();
-  StopLAPICTimer();
-
-  sprintf(s, "[%9d]", elapsed);
   console->PutString(s);
   return result;
 }
@@ -67,18 +57,21 @@ char memory_manager_buf[sizeof(BitmapMemoryManager)];
 BitmapMemoryManager *memory_manager;
 // #@@range_end(memman_buf)
 
+// #@@range_begin(limit_mouse_area)
 unsigned int mouse_layer_id;
+Vector2D<int> screen_size;
+Vector2D<int> mouse_position;
 
 // #@@range_begin(mouse_observer)
 void MouseObserver(int8_t displacement_x, int8_t displacement_y) {
-  layer_manager->MoveRelative(mouse_layer_id, {displacement_x, displacement_y});
-  StartLAPICTimer();
+  auto newpos = mouse_position + Vector2D<int>{displacement_x, displacement_y};
+  newpos = ElementMin(newpos, screen_size + Vector2D<int>{-1, -1});
+  mouse_position = ElementMax(newpos, {0, 0});
+
+  layer_manager->Move(mouse_layer_id, mouse_position);
   layer_manager->Draw();
-  auto elapsed = LAPICTimerElapsed();
-  StopLAPICTimer();
-  printk("MouseObserver: elapsed = %u\n", elapsed);
 }
-// #@@range_end(mouse_observer)
+// #@@range_end(limit_mouse_area)
 
 void SwitchEhci2Xhci(const pci::Device &xhc_dev) {
   bool intel_ehc_exist = false;
@@ -139,12 +132,8 @@ KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
 
   console = new (console_buf) Console{kDesktopFGColor, kDesktopBGColor};
   console->SetWriter(pixel_writer);
-  // #@@range_begin(initialize_lapic_timer)
   printk("Welcome to MikanOS!\n");
   SetLogLevel(kWarn);
-
-  InitializeLAPICTimer();
-  // #@@range_begin(initialize_lapic_timer)
 
   SetupSegments();
 
@@ -272,10 +261,10 @@ KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
   }
   // #@@range_end(configure_port)
 
-  const int kFrameWidth = frame_buffer_config.horizontal_resolution;
-  const int kFrameHeight = frame_buffer_config.vertical_resolution;
+  screen_size.x = frame_buffer_config.horizontal_resolution;
+  screen_size.y = frame_buffer_config.vertical_resolution;
 
-  auto bgwindow = std::make_shared<Window>(kFrameWidth, kFrameHeight,
+  auto bgwindow = std::make_shared<Window>(screen_size.x, screen_size.y,
                                            frame_buffer_config.pixel_format);
   auto bgwriter = bgwindow->Writer();
 
@@ -286,6 +275,7 @@ KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
       kMouseCursorWidth, kMouseCursorHeight, frame_buffer_config.pixel_format);
   mouse_window->SetTransparentColor(kMouseTransparentColor);
   DrawMouseCursor(mouse_window->Writer(), {0, 0});
+  mouse_position = {200, 200};
 
   // #@@range_begin(create_screen)
   FrameBuffer screen;
@@ -301,7 +291,7 @@ KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
   auto bglayer_id =
       layer_manager->NewLayer().SetWindow(bgwindow).Move({0, 0}).ID();
   mouse_layer_id =
-      layer_manager->NewLayer().SetWindow(mouse_window).Move({200, 200}).ID();
+      layer_manager->NewLayer().SetWindow(mouse_window).Move(mouse_position).ID();
 
   layer_manager->UpDown(bglayer_id, 0);
   layer_manager->UpDown(mouse_layer_id, 1);
