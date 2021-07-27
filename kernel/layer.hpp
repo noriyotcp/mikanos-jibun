@@ -51,7 +51,6 @@ private:
 // #@@range_end(layer)
 
 /** @brief LayerManager は複数のレイヤーを管理する。 */
-// #@@range_begin(layer_manager)
 class LayerManager {
 public:
   /** @brief Draw メソッドなどで描画する際の描画先を設定する。 */
@@ -87,6 +86,7 @@ public:
 
 private:
   FrameBuffer *screen_{nullptr};
+  mutable FrameBuffer back_buffer_{};
   std::vector<std::unique_ptr<Layer>> layers_{};
   std::vector<Layer *> layer_stack_{};
   unsigned int latest_id_{0};
@@ -95,4 +95,3 @@ private:
 };
 
 extern LayerManager *layer_manager;
-// #@@range_end(layer_manager)
