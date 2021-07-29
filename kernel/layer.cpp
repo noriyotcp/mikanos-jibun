@@ -1,5 +1,7 @@
 #include "layer.hpp"
 
+#include "console.hpp"
+#include "logger.hpp"
 #include <algorithm>
 
 Layer::Layer(unsigned int id) : id_{id} {}
@@ -15,16 +17,12 @@ std::shared_ptr<Window> Layer::GetWindow() const { return window_; }
 
 Vector2D<int> Layer::GetPosition() const { return pos_; }
 
-// #@@range_begin(set_draggable)
 Layer &Layer::SetDraggable(bool draggable) {
   draggable_ = draggable;
   return *this;
 }
 
-bool Layer::IsDraggable() const {
-  return draggable_;
-}
-// #@@range_end(set_draggable)
+bool Layer::IsDraggable() const { return draggable_; }
 
 Layer &Layer::Move(Vector2D<int> pos) {
   pos_ = pos;
@@ -147,8 +145,8 @@ Layer *LayerManager::FindLayerByPosition(Vector2D<int> pos,
     }
     const auto win_pos = layer->GetPosition();
     const auto win_end_pos = win_pos + win->Size();
-    return win_pos.x <= pos.x && pos.x < win_end_pos.x &&
-           win_pos.y <= pos.y && pos.y < win_end_pos.y;
+    return win_pos.x <= pos.x && pos.x < win_end_pos.x && win_pos.y <= pos.y &&
+           pos.y < win_end_pos.y;
   };
   auto it = std::find_if(layer_stack_.rbegin(), layer_stack_.rend(), pred);
   if (it == layer_stack_.rend()) {
@@ -168,4 +166,38 @@ Layer *LayerManager::FindLayer(unsigned int id) {
   return it->get();
 }
 
+namespace {
+  FrameBuffer *screen;
+}
+
 LayerManager *layer_manager;
+
+void InitializeLayer() {
+  const auto screen_size = ScreenSize();
+
+  auto bgwindow = std::make_shared<Window>(screen_size.x, screen_size.y,
+                                           screen_config.pixel_format);
+  DrawDesktop(*bgwindow->Writer());
+
+  auto console_window = std::make_shared<Window>(
+      Console::kColumns * 8, Console::kRows * 16, screen_config.pixel_format);
+  console->SetWindow(console_window);
+
+  screen = new FrameBuffer;
+  if (auto err = screen->Initialize(screen_config)) {
+    Log(kError, "failed to initialize frame buffer: %s at %s:%d\n", err.Name(),
+        err.File(), err.Line());
+    exit(1);
+  }
+
+  layer_manager = new LayerManager;
+  layer_manager->SetWriter(screen);
+
+  auto bglayer_id =
+      layer_manager->NewLayer().SetWindow(bgwindow).Move({0, 0}).ID();
+  console->SetLayerID(
+      layer_manager->NewLayer().SetWindow(console_window).Move({0, 0}).ID());
+
+  layer_manager->UpDown(bglayer_id, 0);
+  layer_manager->UpDown(console->LayerID(), 1);
+}

@@ -8,10 +8,11 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 
 #include "x86_descriptor.hpp"
+#include "message.hpp"
 
-// #@@range_begin(descriptor_attr_struct)
 union InterruptDescritorAttribute {
   uint16_t data;
   struct {
@@ -23,9 +24,7 @@ union InterruptDescritorAttribute {
     uint16_t present : 1;
   } __attribute__((packed)) bits;
 } __attribute__((packed));
-// #@@range_end(descriptor_attr_struct)
 
-// #@@range_begin(descriptor_struct)
 struct InterruptDescritor {
   uint16_t offset_low;
   uint16_t segment_selector;
@@ -34,11 +33,9 @@ struct InterruptDescritor {
   uint32_t offset_high;
   uint32_t reserved;
 } __attribute__((packed));
-// #@@range_end(descriptor_struct)
 
 extern std::array<InterruptDescritor, 256> idt;
 
-// #@@range_begin(make_idt_attr)
 constexpr InterruptDescritorAttribute
 MakeIDTAttr(DescriptorType type, uint8_t descriptor_privilege_level,
             bool present = true, uint8_t interrupt_stack_table = 0) {
@@ -49,21 +46,16 @@ MakeIDTAttr(DescriptorType type, uint8_t descriptor_privilege_level,
   attr.bits.present = present;
   return attr;
 }
-// #@@range_end(make_idt_attr)
 
 void SetIDTEntry(InterruptDescritor &desc, InterruptDescritorAttribute attr,
                  uint64_t offset, uint16_t segment_selector);
 
-// #@@range_begin(vector_numbers)
 class InterruptVector {
 public:
   enum Number {
     kXHCI = 0x40,
   };
 };
-// #@@range_end(vector_numbers)
-
-// #@@range_begin(frame_struct)
 struct InterruptFrame {
   uint64_t rip;
   uint64_t cs;
@@ -71,6 +63,7 @@ struct InterruptFrame {
   uint64_t rsp;
   uint64_t ss;
 };
-// #@@range_end(frame_struct)
 
 void NotifyEndOfInterrupt();
+
+void InitializeInterrupt(std::deque<Message> *msg_queue);
