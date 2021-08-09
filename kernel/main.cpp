@@ -23,13 +23,14 @@
 #include "logger.hpp"
 #include "memory_manager.hpp"
 #include "memory_map.hpp"
+#include "message.hpp"
 #include "mouse.hpp"
 #include "paging.hpp"
 #include "pci.hpp"
 #include "segment.hpp"
+#include "timer.hpp"
 #include "usb/xhci/xhci.hpp"
 #include "window.hpp"
-#include "message.hpp"
 
 int printk(const char *format, ...) {
   va_list ap;
@@ -90,6 +91,10 @@ KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
   layer_manager->Draw({{0, 0}, ScreenSize()});
   // #@@range_end(main_function)
 
+  // #@@range_begin(call_init_timer)
+  InitializeLAPICTimer();
+  // #@@range_end(call_init_timer)
+
   char str[128];
   unsigned int count = 0;
 
@@ -114,6 +119,9 @@ KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
     switch (msg.type) {
     case Message::kInterruptXHCI:
       usb::xhci::ProcessEvents();
+      break;
+    case Message::kInterruptLAPICTimer:
+      printk("Timer interrupt\n");
       break;
     default:
       Log(kError, "Unknown message type: %d\n", msg.type);

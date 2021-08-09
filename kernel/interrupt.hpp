@@ -54,8 +54,10 @@ class InterruptVector {
 public:
   enum Number {
     kXHCI = 0x40,
+    kLAPICTimer = 0x41,
   };
 };
+
 struct InterruptFrame {
   uint64_t rip;
   uint64_t cs;
