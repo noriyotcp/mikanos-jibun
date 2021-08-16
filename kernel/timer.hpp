@@ -1,9 +1,9 @@
 #pragma once
 
+#include "message.hpp"
 #include <cstdint>
 #include <queue>
 #include <vector>
-#include "message.hpp"
 
 void InitializeLAPICTimer(std::deque<Message> &msg_queue);
 void StartLAPICTimer();
@@ -23,9 +23,7 @@ private:
 
 // #@@range_begin(timer_less)
 /** @brief タイマー優先度を比較する。タイムアウトが遠いほど優先度低。 */
-inline bool operator<(const Timer &lhs, const Timer &rhs) {
-  return lhs.Timeout() > rhs.Timeout();
-}
+inline bool operator<(const Timer &lhs, const Timer &rhs) { return lhs.Timeout() > rhs.Timeout(); }
 // #@@range_end(timer_less)
 
 class TimerManager {
@@ -44,3 +42,7 @@ private:
 extern TimerManager *timer_manager;
 
 void LAPICTimerOnInterrupt();
+
+extern TimerManager *timer_manager;
+extern unsigned long lapic_timer_freq;
+const int kTimerFreq = 100; // 1秒間に100回、10ミリ秒ごとに tick_ をインクリメントする

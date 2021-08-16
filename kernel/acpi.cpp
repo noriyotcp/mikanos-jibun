@@ -1,5 +1,6 @@
 #include "acpi.hpp"
 
+#include "asmfunc.h"
 #include "logger.hpp"
 #include <cstdlib>
 #include <cstring>
@@ -65,6 +66,29 @@ namespace acpi {
   }
 
   const FADT *fadt;
+
+  // #@@range_begin(wait_ms)
+  void WaitMilliseconds(unsigned long msec) {
+    // bit 8 を取り出す。ACPI PM timer
+    // のカウンタが32ビット幅の場合に真、24ビット幅の場合に偽
+    const bool pm_timer_32 = (fadt->flags >> 8) & 1;
+    // カウンタは fadt->pm_tmr_blk が表す IO ポートに存在するので、IoIn32
+    // でその時点のカウント値を読み取る
+    const uint32_t start = IoIn32(fadt->pm_tmr_blk);
+    uint32_t end = start + kPMTimerFreq * msec / 1000; // kPMTimerFreq == 3.579545 MHz
+    if (!pm_timer_32) { // カウンタが24ビットの場合に end を24ビットに制限する
+      end &= 0x00ffffffu;
+    }
+
+    if (end < start) { // overflow
+      while (IoIn32(fadt->pm_tmr_blk) >= start) {
+      };
+    }
+    // ACPI PM timer が指定したミリ秒だけ待つ
+    while (IoIn32(fadt->pm_tmr_blk) < end) {
+    };
+  }
+  // #@@range_end(wait_ms)
 
   void Initialize(const RSDP &rsdp) {
     if (!rsdp.IsValid()) {
