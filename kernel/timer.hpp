@@ -1,9 +1,10 @@
 #pragma once
 
-#include "message.hpp"
 #include <cstdint>
 #include <queue>
 #include <vector>
+
+#include "message.hpp"
 
 void InitializeLAPICTimer(std::deque<Message> &msg_queue);
 void StartLAPICTimer();

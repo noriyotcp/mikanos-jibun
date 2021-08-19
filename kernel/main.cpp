@@ -20,6 +20,7 @@
 #include "frame_buffer_config.hpp"
 #include "graphics.hpp"
 #include "interrupt.hpp"
+#include "keyboard.hpp"
 #include "layer.hpp"
 #include "logger.hpp"
 #include "memory_manager.hpp"
@@ -93,10 +94,10 @@ KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
   layer_manager->Draw({{0, 0}, ScreenSize()});
   // #@@range_end(main_function)
 
-  // #@@range_begin(call_init_acpi)
   acpi::Initialize(acpi_table);
   InitializeLAPICTimer(*main_queue);
-  // #@@range_end(call_init_acpi)
+
+  InitializeKeyboard(*main_queue);
 
   timer_manager->AddTimer(Timer(200, 2));
   timer_manager->AddTimer(Timer(600, -1));
@@ -131,10 +132,11 @@ KernelMainNewStack(const FrameBufferConfig &frame_buffer_config_ref,
       usb::xhci::ProcessEvents();
       break;
     case Message::kTimerTimeout:
-      printk("Timer timeout = %lu, value = %d\n", msg.arg.timer.timeout, msg.arg.timer.value);
-      if (msg.arg.timer.value > 0)
+      break;
+    case Message::kKeyPush:
+      if (msg.arg.keyboard.ascii != 0)
       {
-        timer_manager->AddTimer(Timer(msg.arg.timer.timeout + 100, msg.arg.timer.value + 1));
+        printk("%c", msg.arg.keyboard.ascii);
       }
       break;
     default:
