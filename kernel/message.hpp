@@ -13,6 +13,7 @@ struct Message {
 
     struct {
       uint8_t keycode;
+      uint8_t modifier;
       char ascii;
     } keyboard;
   } arg;
