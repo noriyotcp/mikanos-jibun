@@ -44,7 +44,7 @@ extern TimerManager *timer_manager;
 extern unsigned long lapic_timer_freq;
 const int kTimerFreq = 100; // 1秒間に100回、10ミリ秒ごとに tick_ をインクリメントする
 
-const int kTaskTimerPeriod = static_cast<int>(kTimerFreq * 0.02);
+const int kTaskTimerPeriod = static_cast<int>(kTimerFreq * 1.0);
 const int kTaskTimerValue = std::numeric_limits<int>::min();
 
 void LAPICTimerOnInterrupt();
