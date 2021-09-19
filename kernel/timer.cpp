@@ -49,7 +49,6 @@ TimerManager::TimerManager(std::deque<Message> &msg_queue) : msg_queue_{msg_queu
 
 void TimerManager::AddTimer(const Timer &timer) { timers_.push(timer); }
 
-// #@@range_begin(timermgr_tick)
 bool TimerManager::Tick() {
   ++tick_;
 
@@ -79,7 +78,6 @@ bool TimerManager::Tick() {
 
   return task_timer_timeout;
 }
-// #@@range_end(timermgr_tick)
 
 TimerManager *timer_manager;
 unsigned long lapic_timer_freq;
@@ -89,6 +87,6 @@ void LAPICTimerOnInterrupt() {
   NotifyEndOfInterrupt();
 
   if (task_timer_timeout) {
-    SwitchTask();
+    task_manager->SwitchTask();
   }
 }
