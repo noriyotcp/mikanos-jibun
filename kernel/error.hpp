@@ -28,6 +28,7 @@ public:
     kNoWaiter,
     kNoPCIMSI,
     kUnknownPixelFormat,
+    kNoSuchTask,
     kLastOfCode, // この列挙子は常に最後に配置する
   };
 
@@ -36,7 +37,7 @@ private:
   // argument list for class template "std::__1::array" is missingC/C++(441)
   // expression must have a constant value -- invalid type "<error-type>" for
   // constant-expression evaluationC/C++(28)
-  static constexpr std::array<const char *, 22> code_names_{
+  static constexpr std::array<const char *, 23> code_names_{
       "kSuccess",
       "kFull",
       "kEmpty",
@@ -58,7 +59,9 @@ private:
       "kUnknownXHCISpeedID",
       "kNoWaiter",
       "kNoPCIMSI",
-      "kUnknownPixelFormat"};
+      "kUnknownPixelFormat",
+      "kNoSuchTask"
+  };
   static_assert(Error::Code::kLastOfCode == code_names_.size());
 
 public:

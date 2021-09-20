@@ -33,7 +33,20 @@ Task &Task::InitContext(TaskFunc *f, int64_t data) {
 // #@@range_end(task_initctx)
 
 TaskContext &Task::Context() { return context_; }
-TaskManager::TaskManager() { NewTask(); }
+
+uint64_t Task::ID() const { return id_; }
+
+Task &Task::Sleep() {
+  task_manager->Sleep(this);
+  return *this;
+}
+
+Task &Task::Wakeup() {
+  task_manager->Wakeup(this);
+  return *this;
+}
+
+TaskManager::TaskManager() { running_.push_back(&NewTask()); }
 
 // #@@range_begin(taskmgr_newtask)
 Task &TaskManager::NewTask() {
@@ -43,19 +56,69 @@ Task &TaskManager::NewTask() {
 // #@@range_end(taskmgr_newtask)
 
 // #@@range_begin(taskmgr_switchtask)
-void TaskManager::SwitchTask() {
-  size_t next_task_index = current_task_index_ + 1;
-  if (next_task_index >= tasks_.size()) {
-    next_task_index = 0;
+void TaskManager::SwitchTask(bool current_sleep) {
+  Task *current_task = running_.front();
+  running_.pop_front();
+  if (!current_sleep) {
+    running_.push_back(current_task);
   }
 
-  Task &current_task = *tasks_[current_task_index_];
-  Task &next_task = *tasks_[next_task_index];
-  current_task_index_ = next_task_index;
+  Task *next_task = running_.front();
 
-  SwitchContext(&next_task.Context(), &current_task.Context());
+  SwitchContext(&next_task->Context(), &current_task->Context());
 }
 // #@@range_end(taskmgr_switchtask)
+
+// #@@range_begin(taskmgr_sleep)
+void TaskManager::Sleep(Task *task) {
+  auto it = std::find(running_.begin(), running_.end(), task);
+
+  if (it == running_.begin()) { // Task is running
+    SwitchTask(true);           // Switch task to sleep a running task
+  }
+
+  if (it == running_.end()) { // Task is not in the run-queue
+    return;
+  }
+  // タスクがランキューの先頭以外に存在する
+  running_.erase(it); // タスクをランキューから外す。タスク切り替えはしない
+}
+// #@@range_end(taskmgr_sleep)
+
+// #@@range_begin(taskmgr_sleep_id)
+Error TaskManager::Sleep(uint64_t id) {
+  auto it =
+      std::find_if(tasks_.begin(), tasks_.end(), [id](const auto &t) { return t->ID() == id; });
+  if (it == tasks_.end()) {
+    return MAKE_ERROR(Error::kNoSuchTask);
+  }
+
+  Sleep(it->get());
+  return MAKE_ERROR(Error::kSuccess);
+}
+// #@@range_end(taskmgr_sleep_id)
+
+// #@@range_begin(taskmgr_wakeup)
+void TaskManager::Wakeup(Task *task) {
+  auto it = std::find(running_.begin(), running_.end(), task);
+  if (it == running_.end()) {
+    running_.push_back(task);
+  }
+}
+// #@@range_end(taskmgr_wakeup)
+
+// #@@range_begin(taskmgr_wakeup_id)
+Error TaskManager::Wakeup(uint64_t id) {
+  auto it =
+      std::find_if(tasks_.begin(), tasks_.end(), [id](const auto &t) { return t->ID() == id; });
+  if (it == tasks_.end()) {
+    return MAKE_ERROR(Error::kNoSuchTask);
+  }
+
+  Wakeup(it->get());
+  return MAKE_ERROR(Error::kSuccess);
+}
+// #@@range_end(taskmgr_wakeup_id)
 
 TaskManager *task_manager;
 
